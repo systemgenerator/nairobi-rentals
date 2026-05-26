@@ -1,0 +1,82 @@
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background: #f7f7f7;
+}
+
+button {
+  cursor: pointer;
+}
+
+/* MAIN CONTAINER */
+.container {
+  max-width: 1000px;
+  margin: auto;
+  padding: 16px;
+}
+
+/* LISTING CARD */
+.card {
+  background: white;
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+/* IMAGE */
+.card img {
+  width: 100%;
+  height: 220px;
+  object-fit: cover;
+  border-radius: 10px;
+}
+
+/* BUTTONS */
+button {
+  padding: 10px 14px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+/* PRIMARY BUTTON */
+.btn-primary {
+  background: green;
+  color: white;
+}
+
+/* FEATURE BUTTON */
+.btn-feature {
+  background: orange;
+  color: white;
+}
+
+/* SAVE BUTTON */
+.btn-save {
+  background: #444;
+  color: white;
+}
+
+/* HEADER */
+.header {
+  font-size: 22px;
+  font-weight: bold;
+  margin-bottom: 10px;
+}
+
+/* MOBILE RESPONSIVE */
+@media (max-width: 768px) {
+  .container {
+    padding: 10px;
+  }
+
+  .card img {
+    height: 180px;
+  }
+
+  button {
+    width: 100%;
+    margin-top: 6px;
+  }
+}
