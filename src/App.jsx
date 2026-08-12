@@ -4,146 +4,297 @@ import { supabase } from "./supabaseClient";
 import Auth from "./Auth";
 
 const STORAGE_BUCKET = "property-images";
+const ADMIN_EMAIL = "hansielone@gmail.com";
+
+const EMPTY_FORM = {
+  title: "",
+  property_type: "Apartment",
+  location: "",
+  rent: "",
+  description: "",
+  landlord_name: "",
+  whatsapp: "",
+};
 
 export default function App() {
   const [view, setView] = useState("home");
   const [user, setUser] = useState(null);
 
   const [properties, setProperties] = useState([]);
+  const [myProperties, setMyProperties] = useState([]);
   const [pendingProperties, setPendingProperties] = useState([]);
 
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  // ================= SEARCH =================
+  const [editingProperty, setEditingProperty] = useState(null);
 
+  // Password reset
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState("");
+
+  // Search
   const [search, setSearch] = useState("");
-  const [propertyTypeFilter, setPropertyTypeFilter] =
-    useState("All");
+  const [propertyTypeFilter, setPropertyTypeFilter] = useState("All");
   const [minRent, setMinRent] = useState("");
   const [maxRent, setMaxRent] = useState("");
 
-  // ================= FORM =================
-
-  const [form, setForm] = useState({
-    title: "",
-    property_type: "Apartment",
-    location: "",
-    rent: "",
-    description: "",
-    landlord_name: "",
-    whatsapp: "",
-  });
-
+  // Form
+  const [form, setForm] = useState(EMPTY_FORM);
   const [selectedImages, setSelectedImages] = useState([]);
 
-  // ================= LOAD APPROVED =================
+  const isAdmin =
+    user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+  // =========================================================
+  // LOAD APPROVED PROPERTIES
+  // =========================================================
 
   const loadProperties = async () => {
     const { data, error } = await supabase
       .from("properties")
       .select("*")
       .eq("status", "approved")
-      .order("is_premium", {
-        ascending: false,
-      })
-      .order("created_at", {
-        ascending: false,
-      });
+      .order("is_premium", { ascending: false })
+      .order("created_at", { ascending: false });
 
     if (error) {
-      console.error(
-        "Error loading properties:",
-        error
-      );
+      console.error("Error loading properties:", error);
       return;
     }
 
     setProperties(data || []);
   };
 
-  // ================= LOAD PENDING =================
+  // =========================================================
+  // LOAD LANDLORD'S OWN PROPERTIES
+  // =========================================================
+
+  const loadMyProperties = async () => {
+    if (!user || isAdmin) {
+      setMyProperties([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("properties")
+      .select("*")
+      .eq("landlord_id", user.id)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Error loading landlord properties:", error);
+      return;
+    }
+
+    setMyProperties(data || []);
+  };
+
+  // =========================================================
+  // LOAD PENDING PROPERTIES - ADMIN
+  // =========================================================
 
   const loadPendingProperties = async () => {
+    if (!isAdmin) {
+      return;
+    }
+
     const { data, error } = await supabase
       .from("properties")
       .select("*")
       .eq("status", "pending")
-      .order("created_at", {
-        ascending: false,
-      });
+      .order("created_at", { ascending: false });
 
     if (error) {
-      console.error(
-        "Admin loading error:",
-        error
-      );
+      console.error("Admin loading error:", error);
       return;
     }
 
     setPendingProperties(data || []);
   };
 
-  // ================= AUTHENTICATION =================
+  // =========================================================
+  // AUTHENTICATION
+  // =========================================================
 
   useEffect(() => {
-    const getUser = async () => {
+    const initializeAuth = async () => {
       const {
-        data: { user },
-      } = await supabase.auth.getUser();
+        data: { session },
+      } = await supabase.auth.getSession();
 
-      setUser(user);
+      if (session?.user) {
+        setUser(session.user);
+
+        if (
+          window.location.hash.includes("type=recovery") ||
+          window.location.hash.includes("access_token")
+        ) {
+          setView("password-reset");
+        }
+      }
     };
 
-    getUser();
+    initializeAuth();
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setUser(session?.user ?? null);
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session?.user) {
+        setUser(session.user);
+
+        if (event === "PASSWORD_RECOVERY") {
+          setView("password-reset");
+        }
+      } else {
+        setUser(null);
+        setMyProperties([]);
       }
-    );
+    });
 
     return () => {
       subscription.unsubscribe();
     };
   }, []);
 
-  // ================= INITIAL LOAD =================
+  // =========================================================
+  // INITIAL LOAD
+  // =========================================================
 
   useEffect(() => {
     loadProperties();
   }, []);
 
-  // ================= AUTH HANDLERS =================
+  // =========================================================
+  // LOAD LANDLORD DATA WHEN USER CHANGES
+  // =========================================================
 
-  const handleAuthLogin = (loggedInUser) => {
+  useEffect(() => {
+    if (user && !isAdmin) {
+      loadMyProperties();
+    }
+
+    if (isAdmin) {
+      loadPendingProperties();
+    }
+  }, [user, isAdmin]);
+
+  // =========================================================
+  // AUTH HANDLER
+  // =========================================================
+
+  const handleAuthLogin = async (loggedInUser) => {
     setUser(loggedInUser);
 
-    if (loggedInUser) {
-      const fullName =
-        loggedInUser.user_metadata?.full_name || "";
-
-      setForm((previousForm) => ({
-        ...previousForm,
-        landlord_name:
-          previousForm.landlord_name || fullName,
-      }));
-
-      setView("submit");
-    } else {
+    if (!loggedInUser) {
       setView("home");
+      return;
     }
+
+    if (
+      loggedInUser.email?.toLowerCase() ===
+      ADMIN_EMAIL.toLowerCase()
+    ) {
+      setView("home");
+      return;
+    }
+
+    const fullName =
+      loggedInUser.user_metadata?.full_name || "";
+
+    setForm((previousForm) => ({
+      ...previousForm,
+      landlord_name:
+        previousForm.landlord_name || fullName,
+    }));
+
+    await loadMyProperties();
+
+    setView("landlord-dashboard");
   };
+
+  // =========================================================
+  // LOGOUT
+  // =========================================================
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
+
     setUser(null);
+    setMyProperties([]);
+    setPendingProperties([]);
+    setEditingProperty(null);
+    setForm(EMPTY_FORM);
+    setSelectedImages([]);
     setView("home");
   };
 
-  // ================= FORM CHANGE =================
+  // =========================================================
+  // PASSWORD UPDATE
+  // =========================================================
+
+  const handlePasswordUpdate = async (e) => {
+    e.preventDefault();
+
+    setPasswordMessage("");
+
+    if (newPassword.length < 6) {
+      setPasswordMessage(
+        "Password must contain at least 6 characters."
+      );
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordMessage("Passwords do not match.");
+      return;
+    }
+
+    setPasswordLoading(true);
+
+    try {
+      const { error } =
+        await supabase.auth.updateUser({
+          password: newPassword,
+        });
+
+      if (error) {
+        throw error;
+      }
+
+      setPasswordMessage(
+        "Password updated successfully!"
+      );
+
+      setNewPassword("");
+      setConfirmPassword("");
+
+      setTimeout(() => {
+        setView("home");
+
+        window.history.replaceState(
+          {},
+          document.title,
+          window.location.pathname
+        );
+      }, 1500);
+    } catch (error) {
+      console.error(error);
+
+      setPasswordMessage(
+        error.message ||
+          "Could not update password."
+      );
+    } finally {
+      setPasswordLoading(false);
+    }
+  };
+
+  // =========================================================
+  // FORM CHANGE
+  // =========================================================
 
   const handleChange = (e) => {
     setForm({
@@ -152,12 +303,12 @@ export default function App() {
     });
   };
 
-  // ================= IMAGE SELECTION =================
+  // =========================================================
+  // IMAGE SELECTION
+  // =========================================================
 
   const handleImageChange = (e) => {
-    const files = Array.from(
-      e.target.files || []
-    );
+    const files = Array.from(e.target.files || []);
 
     if (files.length > 5) {
       alert(
@@ -168,6 +319,9 @@ export default function App() {
 
     const validFiles = files.filter((file) => {
       if (!file.type.startsWith("image/")) {
+        alert(
+          `${file.name} is not an image.`
+        );
         return false;
       }
 
@@ -184,7 +338,9 @@ export default function App() {
     setSelectedImages(validFiles);
   };
 
-  // ================= UPLOAD IMAGES =================
+  // =========================================================
+  // UPLOAD IMAGES
+  // =========================================================
 
   const uploadImages = async () => {
     const imageUrls = [];
@@ -193,9 +349,10 @@ export default function App() {
       const extension =
         file.name.split(".").pop() || "jpg";
 
-      const fileName = `${Date.now()}-${Math.random()
-        .toString(36)
-        .substring(2)}.${extension}`;
+      const fileName =
+        `${Date.now()}-${Math.random()
+          .toString(36)
+          .substring(2)}.${extension}`;
 
       const filePath =
         `properties/${fileName}`;
@@ -221,24 +378,120 @@ export default function App() {
       const { data } =
         supabase.storage
           .from(STORAGE_BUCKET)
-          .getPublicUrl(
-            filePath
-          );
+          .getPublicUrl(filePath);
 
       if (data?.publicUrl) {
-        imageUrls.push(
-          data.publicUrl
-        );
+        imageUrls.push(data.publicUrl);
       }
     }
 
     return imageUrls;
   };
 
-  // ================= SUBMIT PROPERTY =================
+  // =========================================================
+  // RESET FORM
+  // =========================================================
+
+  const resetForm = () => {
+    setForm(EMPTY_FORM);
+    setSelectedImages([]);
+    setEditingProperty(null);
+
+    const fileInput =
+      document.getElementById("property-images");
+
+    if (fileInput) {
+      fileInput.value = "";
+    }
+  };
+
+  // =========================================================
+  // START EDITING
+  // =========================================================
+
+  const startEditProperty = (property) => {
+    if (!user) {
+      alert("Please log in.");
+      return;
+    }
+
+    if (
+      property.landlord_id &&
+      property.landlord_id !== user.id
+    ) {
+      alert(
+        "You can only edit your own properties."
+      );
+      return;
+    }
+
+    setEditingProperty(property);
+
+    setForm({
+      title: property.title || "",
+      property_type:
+        property.property_type || "Apartment",
+      location: property.location || "",
+      rent: property.rent || "",
+      description:
+        property.description || "",
+      landlord_name:
+        property.landlord_name || "",
+      whatsapp:
+        property.whatsapp || "",
+    });
+
+    setSelectedImages([]);
+
+    setView("edit");
+  };
+
+  // =========================================================
+  // ADD NEW PROPERTY
+  // =========================================================
+
+  const startNewProperty = () => {
+    if (!user) {
+      setView("auth");
+      return;
+    }
+
+    if (isAdmin) {
+      alert(
+        "Admin accounts cannot submit landlord properties."
+      );
+      return;
+    }
+
+    resetForm();
+
+    const fullName =
+      user.user_metadata?.full_name || "";
+
+    setForm({
+      ...EMPTY_FORM,
+      landlord_name: fullName,
+    });
+
+    setView("submit");
+  };
+
+  // =========================================================
+  // SUBMIT NEW PROPERTY
+  // =========================================================
 
   const submitProperty = async (e) => {
     e.preventDefault();
+
+    if (!user) {
+      alert("Please log in first.");
+      return;
+    }
+
+    if (isAdmin) {
+      alert("Admin cannot submit properties.");
+      return;
+    }
 
     if (
       !form.title ||
@@ -270,67 +523,51 @@ export default function App() {
 
       setUploading(false);
 
-      const { error } =
-        await supabase
-          .from("properties")
-          .insert([
-            {
-              title: form.title,
-              property_type:
-                form.property_type,
-              location:
-                form.location,
-              rent: Number(
-                form.rent
-              ),
-              description:
-                form.description,
-              landlord_name:
-                form.landlord_name,
-              whatsapp:
-                form.whatsapp,
-              status: "pending",
-              is_premium: false,
-              image_urls:
-                imageUrls,
-            },
-          ]);
+      const {
+        data: insertedProperty,
+        error,
+      } = await supabase
+        .from("properties")
+        .insert([
+          {
+            title: form.title,
+            property_type:
+              form.property_type,
+            location: form.location,
+            rent: Number(form.rent),
+            description:
+              form.description,
+            landlord_name:
+              form.landlord_name,
+            whatsapp:
+              form.whatsapp,
+            status: "pending",
+            is_premium: false,
+            image_urls: imageUrls,
+            landlord_id: user.id,
+          },
+        ])
+        .select()
+        .single();
 
       if (error) {
-        alert(
-          "Could not submit property:\n\n" +
-            error.message
-        );
-        return;
+        throw new Error(error.message);
       }
+
+      console.log(
+        "Created property:",
+        insertedProperty
+      );
 
       alert(
         "Property submitted successfully!\n\nYour property will be reviewed before appearing publicly."
       );
 
-      setForm({
-        title: "",
-        property_type:
-          "Apartment",
-        location: "",
-        rent: "",
-        description: "",
-        landlord_name: "",
-        whatsapp: "",
-      });
+      resetForm();
 
-      setSelectedImages([]);
+      await loadMyProperties();
 
-      const fileInput =
-        document.getElementById(
-          "property-images"
-        );
-
-      if (fileInput) {
-        fileInput.value = "";
-      }
-
-      setView("home");
+      setView("landlord-dashboard");
     } catch (error) {
       console.error(error);
 
@@ -344,9 +581,192 @@ export default function App() {
     }
   };
 
-  // ================= APPROVE =================
+  // =========================================================
+  // UPDATE PROPERTY
+  // =========================================================
+
+  const updateProperty = async (e) => {
+    e.preventDefault();
+
+    if (!user || !editingProperty) {
+      alert("No property selected.");
+      return;
+    }
+
+    if (
+      editingProperty.landlord_id &&
+      editingProperty.landlord_id !== user.id
+    ) {
+      alert(
+        "You can only edit your own properties."
+      );
+      return;
+    }
+
+    if (
+      !form.title ||
+      !form.location ||
+      !form.rent ||
+      !form.landlord_name ||
+      !form.whatsapp
+    ) {
+      alert(
+        "Please fill in all required fields."
+      );
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      let imageUrls =
+        editingProperty.image_urls || [];
+
+      // If new images were selected, replace image list
+      if (selectedImages.length > 0) {
+        setUploading(true);
+
+        imageUrls =
+          await uploadImages();
+
+        setUploading(false);
+      }
+
+      const { error } =
+        await supabase
+          .from("properties")
+          .update({
+            title: form.title,
+            property_type:
+              form.property_type,
+            location: form.location,
+            rent: Number(form.rent),
+            description:
+              form.description,
+            landlord_name:
+              form.landlord_name,
+            whatsapp:
+              form.whatsapp,
+            image_urls: imageUrls,
+
+            // Editing means admin should verify again
+            status: "pending",
+            is_premium: false,
+          })
+          .eq("id", editingProperty.id)
+          .eq("landlord_id", user.id);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      alert(
+        "Property updated successfully!\n\nIt has been sent for verification again."
+      );
+
+      resetForm();
+
+      await loadMyProperties();
+      await loadProperties();
+
+      setView("landlord-dashboard");
+    } catch (error) {
+      console.error(error);
+
+      alert(
+        error.message ||
+          "Could not update property."
+      );
+    } finally {
+      setLoading(false);
+      setUploading(false);
+    }
+  };
+
+  // =========================================================
+  // DELETE PROPERTY
+  // =========================================================
+
+  const deleteProperty = async (property) => {
+    if (!user) {
+      alert("Please log in.");
+      return;
+    }
+
+    if (
+      property.landlord_id &&
+      property.landlord_id !== user.id &&
+      !isAdmin
+    ) {
+      alert(
+        "You can only delete your own properties."
+      );
+      return;
+    }
+
+    const confirmed =
+      window.confirm(
+        `Are you sure you want to delete "${property.title}"?\n\nThis action cannot be undone.`
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      let query =
+        supabase
+          .from("properties")
+          .delete()
+          .eq("id", property.id);
+
+      if (!isAdmin) {
+        query = query.eq(
+          "landlord_id",
+          user.id
+        );
+      }
+
+      const { error } = await query;
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      alert(
+        "Property deleted successfully."
+      );
+
+      await loadMyProperties();
+      await loadProperties();
+
+      if (isAdmin) {
+        await loadPendingProperties();
+      }
+    } catch (error) {
+      console.error(error);
+
+      alert(
+        error.message ||
+          "Could not delete property."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // =========================================================
+  // APPROVE PROPERTY
+  // =========================================================
 
   const approveProperty = async (id) => {
+    if (!isAdmin) {
+      alert("Admin access required.");
+      return;
+    }
+
     const confirmed =
       window.confirm(
         "Approve this property and make it public?"
@@ -371,17 +791,22 @@ export default function App() {
       return;
     }
 
-    alert(
-      "Property approved!"
-    );
+    alert("Property approved!");
 
     await loadPendingProperties();
     await loadProperties();
   };
 
-  // ================= REJECT =================
+  // =========================================================
+  // REJECT PROPERTY
+  // =========================================================
 
   const rejectProperty = async (id) => {
+    if (!isAdmin) {
+      alert("Admin access required.");
+      return;
+    }
+
     const confirmed =
       window.confirm(
         "Reject this property?"
@@ -406,16 +831,21 @@ export default function App() {
       return;
     }
 
-    alert(
-      "Property rejected."
-    );
+    alert("Property rejected.");
 
     await loadPendingProperties();
   };
 
-  // ================= MAKE PREMIUM =================
+  // =========================================================
+  // MAKE PREMIUM
+  // =========================================================
 
   const makePremium = async (id) => {
+    if (!isAdmin) {
+      alert("Admin access required.");
+      return;
+    }
+
     const confirmed =
       window.confirm(
         "Make this property a PREMIUM listing?"
@@ -447,9 +877,16 @@ export default function App() {
     await loadProperties();
   };
 
-  // ================= REMOVE PREMIUM =================
+  // =========================================================
+  // REMOVE PREMIUM
+  // =========================================================
 
   const removePremium = async (id) => {
+    if (!isAdmin) {
+      alert("Admin access required.");
+      return;
+    }
+
     const confirmed =
       window.confirm(
         "Remove Premium status from this property?"
@@ -480,16 +917,16 @@ export default function App() {
     await loadProperties();
   };
 
-  // ================= WHATSAPP =================
+  // =========================================================
+  // WHATSAPP
+  // =========================================================
 
-  const contactWhatsApp = (
-    property
-  ) => {
+  const contactWhatsApp = (property) => {
     let phone =
-      property.whatsapp.replace(
+      property.whatsapp?.replace(
         /\D/g,
         ""
-      );
+      ) || "";
 
     if (
       phone.startsWith("07") ||
@@ -511,81 +948,172 @@ export default function App() {
     );
   };
 
-  // ================= FILTER =================
+  // =========================================================
+  // FILTER
+  // =========================================================
 
   const filteredProperties =
-    properties.filter(
-      (property) => {
-        const searchText =
-          search
-            .toLowerCase()
-            .trim();
+    properties.filter((property) => {
+      const searchText =
+        search.toLowerCase().trim();
 
-        const matchesSearch =
-          !searchText ||
-          property.title
-            ?.toLowerCase()
-            .includes(searchText) ||
-          property.location
-            ?.toLowerCase()
-            .includes(searchText) ||
-          property.description
-            ?.toLowerCase()
-            .includes(searchText);
+      const matchesSearch =
+        !searchText ||
+        property.title
+          ?.toLowerCase()
+          .includes(searchText) ||
+        property.location
+          ?.toLowerCase()
+          .includes(searchText) ||
+        property.description
+          ?.toLowerCase()
+          .includes(searchText);
 
-        const matchesType =
-          propertyTypeFilter ===
-            "All" ||
-          property.property_type ===
-            propertyTypeFilter;
+      const matchesType =
+        propertyTypeFilter === "All" ||
+        property.property_type ===
+          propertyTypeFilter;
 
-        const rent =
-          Number(property.rent);
+      const rent =
+        Number(property.rent);
 
-        const matchesMin =
-          !minRent ||
-          rent >=
-            Number(minRent);
+      const matchesMin =
+        !minRent ||
+        rent >= Number(minRent);
 
-        const matchesMax =
-          !maxRent ||
-          rent <=
-            Number(maxRent);
+      const matchesMax =
+        !maxRent ||
+        rent <= Number(maxRent);
 
-        return (
-          matchesSearch &&
-          matchesType &&
-          matchesMin &&
-          matchesMax
-        );
-      }
-    );
+      return (
+        matchesSearch &&
+        matchesType &&
+        matchesMin &&
+        matchesMax
+      );
+    });
 
-  // ================= CLEAR FILTERS =================
+  // =========================================================
+  // CLEAR FILTERS
+  // =========================================================
 
   const clearFilters = () => {
     setSearch("");
-    setPropertyTypeFilter(
-      "All"
-    );
+    setPropertyTypeFilter("All");
     setMinRent("");
     setMaxRent("");
   };
 
-  // ================= AUTH =================
+  // =========================================================
+  // PASSWORD RESET SCREEN
+  // =========================================================
 
-  if (view === "auth") {
-    return <Auth onLogin={handleAuthLogin} />;
+  if (view === "password-reset") {
+    return (
+      <div className="auth-page">
+        <div className="auth-card">
+          <div className="auth-header">
+            <div className="auth-logo">
+              Nairobi <span>Rentals</span>
+            </div>
+
+            <h1>
+              Set your new password
+            </h1>
+
+            <p>
+              Create a permanent password
+              for your Nairobi Rentals
+              account.
+            </p>
+          </div>
+
+          <form
+            onSubmit={
+              handlePasswordUpdate
+            }
+          >
+            <label>
+              New password
+
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) =>
+                  setNewPassword(
+                    e.target.value
+                  )
+                }
+                placeholder="At least 6 characters"
+                minLength={6}
+                required
+              />
+            </label>
+
+            <label>
+              Confirm password
+
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) =>
+                  setConfirmPassword(
+                    e.target.value
+                  )
+                }
+                placeholder="Repeat your password"
+                minLength={6}
+                required
+              />
+            </label>
+
+            {passwordMessage && (
+              <div className="auth-message">
+                {passwordMessage}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              className="auth-submit"
+              disabled={
+                passwordLoading
+              }
+            >
+              {passwordLoading
+                ? "Updating..."
+                : "Set New Password"}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
   }
 
-  // ================= ADMIN =================
+  // =========================================================
+  // AUTH
+  // =========================================================
 
-  if (view === "admin") {
+  if (view === "auth") {
+    return (
+      <Auth
+        onLogin={handleAuthLogin}
+      />
+    );
+  }
+
+  // =========================================================
+  // LANDLORD DASHBOARD
+  // =========================================================
+
+  if (
+    view === "landlord-dashboard" &&
+    user &&
+    !isAdmin
+  ) {
     return (
       <div className="app">
-
         <header className="navbar">
-
           <div
             className="logo"
             onClick={() =>
@@ -593,13 +1121,10 @@ export default function App() {
             }
           >
             Nairobi
-            <span>
-              Rentals
-            </span>
+            <span>Rentals</span>
           </div>
 
           <nav>
-
             <button
               onClick={() =>
                 setView("home")
@@ -608,16 +1133,601 @@ export default function App() {
               Public Website
             </button>
 
-          </nav>
+            <button
+              className="landlord-button"
+              onClick={
+                startNewProperty
+              }
+            >
+              + Add Property
+            </button>
 
+            <button
+              className="admin-nav-button"
+              onClick={
+                handleLogout
+              }
+            >
+              Logout
+            </button>
+          </nav>
+        </header>
+
+        <main className="form-section">
+          <div className="form-container">
+
+            <p className="section-small">
+              LANDLORD DASHBOARD
+            </p>
+
+            <h1>
+              My Properties
+            </h1>
+
+            <p className="form-intro">
+              Manage your rental
+              properties below.
+            </p>
+
+            <button
+              className="primary-button"
+              onClick={
+                startNewProperty
+              }
+            >
+              + List New Property
+            </button>
+
+            <div
+              style={{
+                marginTop: "30px",
+              }}
+            >
+              {myProperties.length ===
+              0 ? (
+                <div className="empty-state">
+                  <h3>
+                    No properties yet
+                  </h3>
+
+                  <p>
+                    You haven't listed
+                    any properties.
+                  </p>
+
+                  <button
+                    className="primary-button"
+                    onClick={
+                      startNewProperty
+                    }
+                  >
+                    List Your First
+                    Property
+                  </button>
+                </div>
+              ) : (
+                <div className="property-grid">
+                  {myProperties.map(
+                    (property) => (
+                      <div
+                        className={`property-card ${
+                          property.is_premium
+                            ? "premium-card"
+                            : ""
+                        }`}
+                        key={
+                          property.id
+                        }
+                      >
+                        <div className="property-image">
+                          {property.image_urls
+                            ?.length >
+                          0 ? (
+                            <img
+                              src={
+                                property
+                                  .image_urls[0]
+                              }
+                              alt={
+                                property.title
+                              }
+                            />
+                          ) : (
+                            <div className="image-placeholder">
+                              🏠
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="property-content">
+                          <div className="property-type">
+                            {
+                              property.property_type
+                            }
+                          </div>
+
+                          <h3>
+                            {
+                              property.title
+                            }
+                          </h3>
+
+                          <p className="location">
+                            📍{" "}
+                            {
+                              property.location
+                            }
+                          </p>
+
+                          <p className="description">
+                            {property.description ||
+                              "No description"}
+                          </p>
+
+                          <p>
+                            <strong>
+                              KSh{" "}
+                              {Number(
+                                property.rent
+                              ).toLocaleString()}
+                              /month
+                            </strong>
+                          </p>
+
+                          <div
+                            style={{
+                              marginTop:
+                                "15px",
+                              padding:
+                                "10px",
+                              borderRadius:
+                                "8px",
+                              background:
+                                property.status ===
+                                "approved"
+                                  ? "#e8f7ee"
+                                  : property.status ===
+                                    "rejected"
+                                  ? "#fdeaea"
+                                  : "#fff6dc",
+                            }}
+                          >
+                            <strong>
+                              Status:{" "}
+                              {property.status
+                                ?.charAt(
+                                  0
+                                )
+                                .toUpperCase() +
+                                property.status?.slice(
+                                  1
+                                )}
+                            </strong>
+                          </div>
+
+                          <div
+                            style={{
+                              display:
+                                "flex",
+                              gap:
+                                "10px",
+                              marginTop:
+                                "15px",
+                              flexWrap:
+                                "wrap",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              className="primary-button"
+                              onClick={() =>
+                                startEditProperty(
+                                  property
+                                )
+                              }
+                            >
+                              Edit
+                            </button>
+
+                            <button
+                              type="button"
+                              className="reject-button"
+                              onClick={() =>
+                                deleteProperty(
+                                  property
+                                )
+                              }
+                              disabled={
+                                loading
+                              }
+                            >
+                              Delete
+                            </button>
+
+                            {property.status ===
+                              "approved" && (
+                              <button
+                                type="button"
+                                className="whatsapp-button"
+                                onClick={() =>
+                                  contactWhatsApp(
+                                    property
+                                  )
+                                }
+                              >
+                                WhatsApp
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // =========================================================
+  // EDIT PROPERTY
+  // =========================================================
+
+  if (
+    view === "edit" &&
+    user &&
+    editingProperty
+  ) {
+    return (
+      <div className="app">
+        <header className="navbar">
+          <div
+            className="logo"
+            onClick={() =>
+              setView(
+                "landlord-dashboard"
+              )
+            }
+          >
+            Nairobi
+            <span>Rentals</span>
+          </div>
+
+          <nav>
+            <button
+              onClick={() =>
+                setView(
+                  "landlord-dashboard"
+                )
+              }
+            >
+              My Properties
+            </button>
+
+            <button
+              className="admin-nav-button"
+              onClick={
+                handleLogout
+              }
+            >
+              Logout
+            </button>
+          </nav>
+        </header>
+
+        <section className="form-section">
+          <div className="form-container">
+            <button
+              className="back-button"
+              onClick={() =>
+                setView(
+                  "landlord-dashboard"
+                )
+              }
+            >
+              ← Back to My Properties
+            </button>
+
+            <p className="section-small">
+              LANDLORD
+            </p>
+
+            <h1>
+              Edit Property
+            </h1>
+
+            <p className="form-intro">
+              After editing, the
+              property will be reviewed
+              by the administrator again.
+            </p>
+
+            <form
+              onSubmit={
+                updateProperty
+              }
+            >
+              <label>
+                Property title *
+
+                <input
+                  name="title"
+                  value={form.title}
+                  onChange={
+                    handleChange
+                  }
+                  required
+                />
+              </label>
+
+              <label>
+                Property type *
+
+                <select
+                  name="property_type"
+                  value={
+                    form.property_type
+                  }
+                  onChange={
+                    handleChange
+                  }
+                >
+                  <option>
+                    Apartment
+                  </option>
+                  <option>
+                    Bedsitter
+                  </option>
+                  <option>
+                    Studio
+                  </option>
+                  <option>
+                    1 Bedroom
+                  </option>
+                  <option>
+                    2 Bedroom
+                  </option>
+                  <option>
+                    3 Bedroom
+                  </option>
+                  <option>
+                    House
+                  </option>
+                  <option>
+                    Maisonette
+                  </option>
+                  <option>
+                    Other
+                  </option>
+                </select>
+              </label>
+
+              <label>
+                Location *
+
+                <input
+                  name="location"
+                  value={
+                    form.location
+                  }
+                  onChange={
+                    handleChange
+                  }
+                  required
+                />
+              </label>
+
+              <label>
+                Monthly rent (KSh) *
+
+                <input
+                  name="rent"
+                  type="number"
+                  value={form.rent}
+                  onChange={
+                    handleChange
+                  }
+                  required
+                />
+              </label>
+
+              <label>
+                Description
+
+                <textarea
+                  name="description"
+                  value={
+                    form.description
+                  }
+                  onChange={
+                    handleChange
+                  }
+                  rows="5"
+                />
+              </label>
+
+              <label>
+                Landlord name *
+
+                <input
+                  name="landlord_name"
+                  value={
+                    form.landlord_name
+                  }
+                  onChange={
+                    handleChange
+                  }
+                  required
+                />
+              </label>
+
+              <label>
+                WhatsApp number *
+
+                <input
+                  name="whatsapp"
+                  value={
+                    form.whatsapp
+                  }
+                  onChange={
+                    handleChange
+                  }
+                  required
+                />
+              </label>
+
+              <label>
+                Replace property photos
+
+                <input
+                  id="property-images"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={
+                    handleImageChange
+                  }
+                />
+
+                <small className="upload-help">
+                  Leave empty to keep
+                  existing photos.
+                  Select up to 5 new
+                  photos to replace them.
+                </small>
+              </label>
+
+              {selectedImages.length >
+                0 && (
+                <div className="image-preview">
+                  {selectedImages.map(
+                    (
+                      file,
+                      index
+                    ) => (
+                      <div
+                        className="preview-item"
+                        key={index}
+                      >
+                        <img
+                          src={URL.createObjectURL(
+                            file
+                          )}
+                          alt={`Preview ${
+                            index + 1
+                          }`}
+                        />
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="primary-button submit-button"
+                disabled={
+                  loading
+                }
+              >
+                {uploading
+                  ? "Uploading photos..."
+                  : loading
+                  ? "Updating..."
+                  : "Save Changes"}
+              </button>
+
+              <button
+                type="button"
+                className="back-button"
+                onClick={() =>
+                  setView(
+                    "landlord-dashboard"
+                  )
+              }
+              >
+                Cancel
+              </button>
+            </form>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  // =========================================================
+  // ADMIN
+  // =========================================================
+
+  if (view === "admin") {
+    if (!isAdmin) {
+      return (
+        <div className="app">
+          <main className="form-section">
+            <div className="form-container">
+              <h1>
+                Access Denied
+              </h1>
+
+              <p>
+                You do not have
+                permission to access
+                the Admin Dashboard.
+              </p>
+
+              <button
+                className="primary-button"
+                onClick={() =>
+                  setView("home")
+                }
+              >
+                Back to Website
+              </button>
+            </div>
+          </main>
+        </div>
+      );
+    }
+
+    return (
+      <div className="app">
+        <header className="navbar">
+          <div
+            className="logo"
+            onClick={() =>
+              setView("home")
+            }
+          >
+            Nairobi
+            <span>Rentals</span>
+          </div>
+
+          <nav>
+            <button
+              onClick={() =>
+                setView("home")
+              }
+            >
+              Public Website
+            </button>
+
+            <button
+              className="admin-nav-button"
+              onClick={
+                handleLogout
+              }
+            >
+              Logout
+            </button>
+          </nav>
         </header>
 
         <main className="admin-section">
-
           <div className="admin-header">
-
             <div>
-
               <p className="section-small">
                 ADMIN
               </p>
@@ -631,27 +1741,21 @@ export default function App() {
                 submitted by
                 landlords.
               </p>
-
             </div>
 
             <button
               className="primary-button"
-              onClick={
-                async () => {
-                  await loadPendingProperties();
-                  await loadProperties();
-                }
-              }
+              onClick={async () => {
+                await loadPendingProperties();
+                await loadProperties();
+              }}
             >
               Refresh
             </button>
-
           </div>
 
           <div className="admin-stats">
-
             <div className="admin-stat">
-
               <strong>
                 {
                   pendingProperties.length
@@ -661,11 +1765,9 @@ export default function App() {
               <span>
                 Pending
               </span>
-
             </div>
 
             <div className="admin-stat">
-
               <strong>
                 {
                   properties.length
@@ -675,11 +1777,9 @@ export default function App() {
               <span>
                 Approved
               </span>
-
             </div>
 
             <div className="admin-stat">
-
               <strong>
                 {
                   properties.filter(
@@ -692,373 +1792,313 @@ export default function App() {
               <span>
                 Premium
               </span>
-
             </div>
-
           </div>
 
-          {/* ================= PENDING ================= */}
+          {/* PENDING */}
 
           <h2 className="admin-subtitle">
             Pending Properties
           </h2>
 
-          {
-            pendingProperties.length ===
-            0 ? (
+          {pendingProperties.length ===
+          0 ? (
+            <div className="empty-state">
+              <h3>
+                No pending properties
+              </h3>
 
-              <div className="empty-state">
-
-                <h3>
-                  No pending
-                  properties
-                </h3>
-
-                <p>
-                  New landlord
-                  submissions will
-                  appear here.
-                </p>
-
-              </div>
-
-            ) : (
-
-              <div className="admin-list">
-
-                {
-                  pendingProperties.map(
-                    (property) => (
-
-                      <div
-                        className="admin-property"
-                        key={
-                          property.id
-                        }
-                      >
-
-                        {
-                          property
-                            .image_urls
-                            ?.length >
-                            0 && (
-
-                            <div className="admin-images">
-
-                              {
-                                property.image_urls.map(
-                                  (
-                                    image,
-                                    index
-                                  ) => (
-
-                                    <img
-                                      key={
-                                        index
-                                      }
-                                      src={
-                                        image
-                                      }
-                                      alt={`Property ${
-                                        index +
-                                        1
-                                      }`}
-                                    />
-
-                                  )
-                                )
+              <p>
+                New landlord
+                submissions will
+                appear here.
+              </p>
+            </div>
+          ) : (
+            <div className="admin-list">
+              {pendingProperties.map(
+                (property) => (
+                  <div
+                    className="admin-property"
+                    key={
+                      property.id
+                    }
+                  >
+                    {property.image_urls
+                      ?.length >
+                      0 && (
+                      <div className="admin-images">
+                        {property.image_urls.map(
+                          (
+                            image,
+                            index
+                          ) => (
+                            <img
+                              key={
+                                index
                               }
-
-                            </div>
-
+                              src={
+                                image
+                              }
+                              alt={`Property ${
+                                index + 1
+                              }`}
+                            />
                           )
-                        }
+                        )}
+                      </div>
+                    )}
 
-                        <div className="admin-property-info">
-
-                          <div className="admin-property-icon">
-                            🏠
-                          </div>
-
-                          <div>
-
-                            <p className="property-type">
-                              {
-                                property.property_type
-                              }
-                            </p>
-
-                            <h2>
-                              {
-                                property.title
-                              }
-                            </h2>
-
-                            <p>
-                              📍{" "}
-                              {
-                                property.location
-                              }
-                            </p>
-
-                            <p>
-                              💰 KSh{" "}
-                              {Number(
-                                property.rent
-                              ).toLocaleString()}
-                              /month
-                            </p>
-
-                            <p>
-                              👤{" "}
-                              {
-                                property.landlord_name
-                              }
-                            </p>
-
-                            <p>
-                              📱{" "}
-                              {
-                                property.whatsapp
-                              }
-                            </p>
-
-                            {
-                              property.description && (
-                                <p>
-                                  {
-                                    property.description
-                                  }
-                                </p>
-                              )
-                            }
-
-                          </div>
-
-                        </div>
-
-                        <div className="admin-actions">
-
-                          <button
-                            className="approve-button"
-                            onClick={() =>
-                              approveProperty(
-                                property.id
-                              )
-                            }
-                          >
-                            ✓ Approve
-                          </button>
-
-                          <button
-                            className="reject-button"
-                            onClick={() =>
-                              rejectProperty(
-                                property.id
-                              )
-                            }
-                          >
-                            ✕ Reject
-                          </button>
-
-                        </div>
-
+                    <div className="admin-property-info">
+                      <div className="admin-property-icon">
+                        🏠
                       </div>
 
-                    )
-                  )
-                }
+                      <div>
+                        <p className="property-type">
+                          {
+                            property.property_type
+                          }
+                        </p>
 
-              </div>
+                        <h2>
+                          {
+                            property.title
+                          }
+                        </h2>
 
-            )
-          }
+                        <p>
+                          📍{" "}
+                          {
+                            property.location
+                          }
+                        </p>
 
-          {/* ================= APPROVED ================= */}
+                        <p>
+                          💰 KSh{" "}
+                          {Number(
+                            property.rent
+                          ).toLocaleString()}
+                          /month
+                        </p>
+
+                        <p>
+                          👤{" "}
+                          {
+                            property.landlord_name
+                          }
+                        </p>
+
+                        <p>
+                          📱{" "}
+                          {
+                            property.whatsapp
+                          }
+                        </p>
+
+                        {property.description && (
+                          <p>
+                            {
+                              property.description
+                            }
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="admin-actions">
+                      <button
+                        className="approve-button"
+                        onClick={() =>
+                          approveProperty(
+                            property.id
+                          )
+                        }
+                      >
+                        ✓ Approve
+                      </button>
+
+                      <button
+                        className="reject-button"
+                        onClick={() =>
+                          rejectProperty(
+                            property.id
+                          )
+                        }
+                      >
+                        ✕ Reject
+                      </button>
+
+                      <button
+                        className="reject-button"
+                        onClick={() =>
+                          deleteProperty(
+                            property
+                          )
+                        }
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                )
+              )}
+            </div>
+          )}
+
+          {/* APPROVED */}
 
           <h2 className="admin-subtitle">
             Approved Properties
           </h2>
 
-          {
-            properties.length ===
-            0 ? (
-
-              <div className="empty-state">
-
-                <p>
-                  No approved
-                  properties yet.
-                </p>
-
-              </div>
-
-            ) : (
-
-              <div className="admin-list">
-
-                {
-                  properties.map(
-                    (property) => (
-
-                      <div
-                        className="admin-property"
-                        key={
-                          property.id
-                        }
-                      >
-
-                        {
-                          property
-                            .image_urls
-                            ?.length >
-                            0 && (
-
-                            <div className="admin-images">
-
-                              {
-                                property.image_urls.map(
-                                  (
-                                    image,
-                                    index
-                                  ) => (
-
-                                    <img
-                                      key={
-                                        index
-                                      }
-                                      src={
-                                        image
-                                      }
-                                      alt={`Property ${
-                                        index +
-                                        1
-                                      }`}
-                                    />
-
-                                  )
-                                )
+          {properties.length ===
+          0 ? (
+            <div className="empty-state">
+              <p>
+                No approved
+                properties yet.
+              </p>
+            </div>
+          ) : (
+            <div className="admin-list">
+              {properties.map(
+                (property) => (
+                  <div
+                    className="admin-property"
+                    key={
+                      property.id
+                    }
+                  >
+                    {property.image_urls
+                      ?.length >
+                      0 && (
+                      <div className="admin-images">
+                        {property.image_urls.map(
+                          (
+                            image,
+                            index
+                          ) => (
+                            <img
+                              key={
+                                index
                               }
-
-                            </div>
-
+                              src={
+                                image
+                              }
+                              alt={`Property ${
+                                index + 1
+                              }`}
+                            />
                           )
-                        }
+                        )}
+                      </div>
+                    )}
 
-                        <div className="admin-property-info">
-
-                          <div className="admin-property-icon">
-                            🏠
-                          </div>
-
-                          <div>
-
-                            {
-                              property.is_premium && (
-                                <div className="premium-admin-label">
-                                  ⭐ PREMIUM
-                                </div>
-                              )
-                            }
-
-                            <p className="property-type">
-                              {
-                                property.property_type
-                              }
-                            </p>
-
-                            <h2>
-                              {
-                                property.title
-                              }
-                            </h2>
-
-                            <p>
-                              📍{" "}
-                              {
-                                property.location
-                              }
-                            </p>
-
-                            <p>
-                              💰 KSh{" "}
-                              {Number(
-                                property.rent
-                              ).toLocaleString()}
-                              /month
-                            </p>
-
-                            <p>
-                              👤{" "}
-                              {
-                                property.landlord_name
-                              }
-                            </p>
-
-                          </div>
-
-                        </div>
-
-                        <div className="admin-actions">
-
-                          {
-                            property.is_premium ? (
-
-                              <button
-                                className="remove-premium-button"
-                                onClick={() =>
-                                  removePremium(
-                                    property.id
-                                  )
-                                }
-                              >
-                                Remove Premium
-                              </button>
-
-                            ) : (
-
-                              <button
-                                className="premium-button"
-                                onClick={() =>
-                                  makePremium(
-                                    property.id
-                                  )
-                                }
-                              >
-                                ⭐ Make Premium
-                              </button>
-
-                            )
-                          }
-
-                        </div>
-
+                    <div className="admin-property-info">
+                      <div className="admin-property-icon">
+                        🏠
                       </div>
 
-                    )
-                  )
-                }
+                      <div>
+                        {property.is_premium && (
+                          <div className="premium-admin-label">
+                            ⭐ PREMIUM
+                          </div>
+                        )}
 
-              </div>
+                        <p className="property-type">
+                          {
+                            property.property_type
+                          }
+                        </p>
 
-            )
-          }
+                        <h2>
+                          {
+                            property.title
+                          }
+                        </h2>
 
+                        <p>
+                          📍{" "}
+                          {
+                            property.location
+                          }
+                        </p>
+
+                        <p>
+                          💰 KSh{" "}
+                          {Number(
+                            property.rent
+                          ).toLocaleString()}
+                          /month
+                        </p>
+
+                        <p>
+                          👤{" "}
+                          {
+                            property.landlord_name
+                          }
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="admin-actions">
+                      {property.is_premium ? (
+                        <button
+                          className="remove-premium-button"
+                          onClick={() =>
+                            removePremium(
+                              property.id
+                            )
+                          }
+                        >
+                          Remove Premium
+                        </button>
+                      ) : (
+                        <button
+                          className="premium-button"
+                          onClick={() =>
+                            makePremium(
+                              property.id
+                            )
+                          }
+                        >
+                          ⭐ Make Premium
+                        </button>
+                      )}
+
+                      <button
+                        className="reject-button"
+                        onClick={() =>
+                          deleteProperty(
+                            property
+                          )
+                        }
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                )
+              )}
+            </div>
+          )}
         </main>
-
       </div>
     );
   }
 
-  // ================= MAIN WEBSITE =================
+  // =========================================================
+  // MAIN WEBSITE
+  // =========================================================
 
   return (
     <div className="app">
 
-      {/* ================= NAVBAR ================= */}
+      {/* NAVBAR */}
 
       <header className="navbar">
-
         <div
           className="logo"
           onClick={() =>
@@ -1066,13 +2106,10 @@ export default function App() {
           }
         >
           Nairobi
-          <span>
-            Rentals
-          </span>
+          <span>Rentals</span>
         </div>
 
         <nav>
-
           <button
             onClick={() =>
               setView("home")
@@ -1081,48 +2118,55 @@ export default function App() {
             Find a Home
           </button>
 
-          <button
-            className="landlord-button"
-            onClick={() =>
-              user ? setView("submit") : setView("auth")
-            }
-          >
-            List Your Property
-          </button>
+          {!isAdmin && (
+            <button
+              className="landlord-button"
+              onClick={() =>
+                user
+                  ? setView(
+                      "landlord-dashboard"
+                    )
+                  : setView("auth")
+              }
+            >
+              {user
+                ? "My Properties"
+                : "List Your Property"}
+            </button>
+          )}
 
-          {user ? (
+          {user && (
             <button
               className="admin-nav-button"
-              onClick={handleLogout}
+              onClick={
+                handleLogout
+              }
             >
               Logout
             </button>
-          ) : null}
+          )}
 
-          <button
-            className="admin-nav-button"
-            onClick={async () => {
-              await loadPendingProperties();
-              await loadProperties();
-              setView("admin");
-            }}
-          >
-            Admin
-          </button>
-
+          {isAdmin && (
+            <button
+              className="admin-nav-button"
+              onClick={async () => {
+                await loadPendingProperties();
+                await loadProperties();
+                setView("admin");
+              }}
+            >
+              Admin Dashboard
+            </button>
+          )}
         </nav>
-
       </header>
 
-      {/* ================= HOME ================= */}
+      {/* HOME */}
 
       {view === "home" && (
         <>
-
           <section className="hero-section">
-
             <div className="hero-content">
-
               <p className="hero-small">
                 FIND YOUR NEXT HOME
               </p>
@@ -1157,22 +2201,17 @@ export default function App() {
               >
                 Browse Properties
               </button>
-
             </div>
-
           </section>
 
-          {/* ================= PROPERTIES ================= */}
+          {/* PROPERTIES */}
 
           <section
             id="properties"
             className="properties-section"
           >
-
             <div className="section-heading">
-
               <div>
-
                 <p className="section-small">
                   AVAILABLE NOW
                 </p>
@@ -1180,7 +2219,6 @@ export default function App() {
                 <h2>
                   Featured Rentals
                 </h2>
-
               </div>
 
               <span>
@@ -1189,32 +2227,25 @@ export default function App() {
                 }{" "}
                 properties
               </span>
-
             </div>
 
             {/* SEARCH */}
 
             <div className="search-panel">
-
               <div className="search-main">
-
                 <input
                   type="text"
                   placeholder="Search by location or property..."
-                  value={
-                    search
-                  }
+                  value={search}
                   onChange={(e) =>
                     setSearch(
                       e.target.value
                     )
                   }
                 />
-
               </div>
 
               <div className="search-filters">
-
                 <select
                   value={
                     propertyTypeFilter
@@ -1225,52 +2256,47 @@ export default function App() {
                     )
                   }
                 >
-
                   <option value="All">
-                    All property
-                    types
+                    All property types
                   </option>
 
-                  <option value="Apartment">
+                  <option>
                     Apartment
                   </option>
 
-                  <option value="Bedsitter">
+                  <option>
                     Bedsitter
                   </option>
 
-                  <option value="Studio">
+                  <option>
                     Studio
                   </option>
 
-                  <option value="1 Bedroom">
+                  <option>
                     1 Bedroom
                   </option>
 
-                  <option value="2 Bedroom">
+                  <option>
                     2 Bedroom
                   </option>
 
-                  <option value="3 Bedroom">
+                  <option>
                     3 Bedroom
                   </option>
 
-                  <option value="House">
+                  <option>
                     House
                   </option>
 
-                  <option value="Maisonette">
+                  <option>
                     Maisonette
                   </option>
-
                 </select>
 
                 <input
                   type="number"
                   placeholder="Min rent"
-                  value={
-                    minRent
-                  }
+                  value={minRent}
                   onChange={(e) =>
                     setMinRent(
                       e.target.value
@@ -1281,9 +2307,7 @@ export default function App() {
                 <input
                   type="number"
                   placeholder="Max rent"
-                  value={
-                    maxRent
-                  }
+                  value={maxRent}
                   onChange={(e) =>
                     setMaxRent(
                       e.target.value
@@ -1300,190 +2324,140 @@ export default function App() {
                 >
                   Clear
                 </button>
-
               </div>
-
             </div>
 
             {/* RESULTS */}
 
-            {
-              filteredProperties.length ===
-              0 ? (
+            {filteredProperties.length ===
+            0 ? (
+              <div className="empty-state">
+                <h3>
+                  No properties found
+                </h3>
 
-                <div className="empty-state">
+                <p>
+                  Try changing
+                  your search or
+                  filters.
+                </p>
 
-                  <h3>
-                    No properties
-                    found
-                  </h3>
+                <button
+                  className="primary-button"
+                  onClick={
+                    clearFilters
+                  }
+                >
+                  Clear Filters
+                </button>
+              </div>
+            ) : (
+              <div className="property-grid">
+                {filteredProperties.map(
+                  (property) => (
+                    <div
+                      className={`property-card ${
+                        property.is_premium
+                          ? "premium-card"
+                          : ""
+                      }`}
+                      key={
+                        property.id
+                      }
+                    >
+                      {property.is_premium && (
+                        <div className="premium-badge">
+                          ⭐ PREMIUM
+                        </div>
+                      )}
 
-                  <p>
-                    Try changing
-                    your search or
-                    filters.
-                  </p>
-
-                  <button
-                    className="primary-button"
-                    onClick={
-                      clearFilters
-                    }
-                  >
-                    Clear Filters
-                  </button>
-
-                </div>
-
-              ) : (
-
-                <div className="property-grid">
-
-                  {
-                    filteredProperties.map(
-                      (
-                        property
-                      ) => (
-
-                        <div
-                          className={`property-card ${
-                            property.is_premium
-                              ? "premium-card"
-                              : ""
-                          }`}
-                          key={
-                            property.id
-                          }
-                        >
-
-                          {
-                            property.is_premium && (
-                              <div className="premium-badge">
-                                ⭐ PREMIUM
-                              </div>
-                            )
-                          }
-
-                          <div className="property-image">
-
-                            {
+                      <div className="property-image">
+                        {property.image_urls
+                          ?.length >
+                        0 ? (
+                          <img
+                            src={
                               property
-                                .image_urls
-                                ?.length >
-                              0 ? (
-
-                                <img
-                                  src={
-                                    property
-                                      .image_urls[0]
-                                  }
-                                  alt={
-                                    property.title
-                                  }
-                                />
-
-                              ) : property.image_url ? (
-
-                                <img
-                                  src={
-                                    property.image_url
-                                  }
-                                  alt={
-                                    property.title
-                                  }
-                                />
-
-                              ) : (
-
-                                <div className="image-placeholder">
-                                  🏠
-                                </div>
-
-                              )
+                                .image_urls[0]
                             }
-
+                            alt={
+                              property.title
+                            }
+                          />
+                        ) : (
+                          <div className="image-placeholder">
+                            🏠
                           </div>
+                        )}
+                      </div>
 
-                          <div className="property-content">
-
-                            <div className="property-type">
-                              {
-                                property.property_type
-                              }
-                            </div>
-
-                            <h3>
-                              {
-                                property.title
-                              }
-                            </h3>
-
-                            <p className="location">
-                              📍{" "}
-                              {
-                                property.location
-                              }
-                            </p>
-
-                            <p className="description">
-                              {
-                                property.description ||
-                                "Contact the landlord for more information."
-                              }
-                            </p>
-
-                            <div className="property-bottom">
-
-                              <strong>
-                                KSh{" "}
-                                {Number(
-                                  property.rent
-                                ).toLocaleString()}
-
-                                <small>
-                                  /month
-                                </small>
-                              </strong>
-
-                              <button
-                                className="whatsapp-button"
-                                onClick={() =>
-                                  contactWhatsApp(
-                                    property
-                                  )
-                                }
-                              >
-                                WhatsApp
-                              </button>
-
-                            </div>
-
-                            <div className="verified">
-                              ✓ Verified
-                              listing
-                            </div>
-
-                          </div>
-
+                      <div className="property-content">
+                        <div className="property-type">
+                          {
+                            property.property_type
+                          }
                         </div>
 
-                      )
-                    )
-                  }
+                        <h3>
+                          {
+                            property.title
+                          }
+                        </h3>
 
-                </div>
+                        <p className="location">
+                          📍{" "}
+                          {
+                            property.location
+                          }
+                        </p>
 
-              )
-            }
+                        <p className="description">
+                          {
+                            property.description ||
+                            "Contact the landlord for more information."
+                          }
+                        </p>
 
+                        <div className="property-bottom">
+                          <strong>
+                            KSh{" "}
+                            {Number(
+                              property.rent
+                            ).toLocaleString()}
+
+                            <small>
+                              /month
+                            </small>
+                          </strong>
+
+                          <button
+                            className="whatsapp-button"
+                            onClick={() =>
+                              contactWhatsApp(
+                                property
+                              )
+                            }
+                          >
+                            WhatsApp
+                          </button>
+                        </div>
+
+                        <div className="verified">
+                          ✓ Verified
+                          listing
+                        </div>
+                      </div>
+                    </div>
+                  )
+                )}
+              </div>
+            )}
           </section>
 
-          {/* ================= LANDLORD CTA ================= */}
+          {/* LANDLORD CTA */}
 
           <section className="landlord-banner">
-
             <div>
-
               <p className="section-small">
                 FOR LANDLORDS
               </p>
@@ -1499,35 +2473,35 @@ export default function App() {
                 looking for homes
                 in Nairobi.
               </p>
-
             </div>
 
             <button
               className="primary-button light-button"
               onClick={() =>
-                user ? setView("submit") : setView("auth")
+                user
+                  ? startNewProperty()
+                  : setView("auth")
               }
             >
               Submit Property
             </button>
-
           </section>
-
         </>
       )}
 
-      {/* ================= SUBMIT ================= */}
+      {/* SUBMIT */}
 
       {view === "submit" && (
-
         <section className="form-section">
-
           <div className="form-container">
-
             <button
               className="back-button"
               onClick={() =>
-                setView("home")
+                user
+                  ? setView(
+                      "landlord-dashboard"
+                    )
+                  : setView("home")
               }
             >
               ← Back
@@ -1553,19 +2527,17 @@ export default function App() {
                 submitProperty
               }
             >
-
               <label>
                 Property title *
 
                 <input
                   name="title"
-                  value={
-                    form.title
-                  }
+                  value={form.title}
                   onChange={
                     handleChange
                   }
                   placeholder="e.g. Modern 2 Bedroom Apartment"
+                  required
                 />
               </label>
 
@@ -1581,7 +2553,6 @@ export default function App() {
                     handleChange
                   }
                 >
-
                   <option>
                     Apartment
                   </option>
@@ -1617,9 +2588,7 @@ export default function App() {
                   <option>
                     Other
                   </option>
-
                 </select>
-
               </label>
 
               <label>
@@ -1634,6 +2603,7 @@ export default function App() {
                     handleChange
                   }
                   placeholder="e.g. Kasarani, Nairobi"
+                  required
                 />
               </label>
 
@@ -1643,13 +2613,12 @@ export default function App() {
                 <input
                   name="rent"
                   type="number"
-                  value={
-                    form.rent
-                  }
+                  value={form.rent}
                   onChange={
                     handleChange
                   }
                   placeholder="25000"
+                  required
                 />
               </label>
 
@@ -1681,6 +2650,7 @@ export default function App() {
                     handleChange
                   }
                   placeholder="Your name"
+                  required
                 />
               </label>
 
@@ -1696,6 +2666,7 @@ export default function App() {
                     handleChange
                   }
                   placeholder="254712345678"
+                  required
                 />
               </label>
 
@@ -1710,6 +2681,7 @@ export default function App() {
                   onChange={
                     handleImageChange
                   }
+                  required
                 />
 
                 <small className="upload-help">
@@ -1717,49 +2689,33 @@ export default function App() {
                   photos. Maximum
                   5MB each.
                 </small>
-
               </label>
 
-              {
-                selectedImages.length >
-                  0 && (
-
-                  <div className="image-preview">
-
-                    {
-                      selectedImages.map(
-                        (
-                          file,
-                          index
-                        ) => (
-
-                          <div
-                            className="preview-item"
-                            key={
-                              index
-                            }
-                          >
-
-                            <img
-                              src={URL.createObjectURL(
-                                file
-                              )}
-                              alt={`Preview ${
-                                index +
-                                1
-                              }`}
-                            />
-
-                          </div>
-
-                        )
-                      )
-                    }
-
-                  </div>
-
-                )
-              }
+              {selectedImages.length >
+                0 && (
+                <div className="image-preview">
+                  {selectedImages.map(
+                    (
+                      file,
+                      index
+                    ) => (
+                      <div
+                        className="preview-item"
+                        key={index}
+                      >
+                        <img
+                          src={URL.createObjectURL(
+                            file
+                          )}
+                          alt={`Preview ${
+                            index + 1
+                          }`}
+                        />
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
 
               <button
                 type="submit"
@@ -1768,13 +2724,11 @@ export default function App() {
                   loading
                 }
               >
-                {
-                  uploading
-                    ? "Uploading photos..."
-                    : loading
-                    ? "Submitting..."
-                    : "Submit Property"
-                }
+                {uploading
+                  ? "Uploading photos..."
+                  : loading
+                  ? "Submitting..."
+                  : "Submit Property"}
               </button>
 
               <p className="verification-note">
@@ -1783,15 +2737,10 @@ export default function App() {
                 before appearing
                 publicly.
               </p>
-
             </form>
-
           </div>
-
         </section>
-
       )}
-
     </div>
   );
 }
