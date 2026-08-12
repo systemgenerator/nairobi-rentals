@@ -89,14 +89,67 @@ app.post("/stkpush", async (req, res) => {
   }
 });
 
-// ================= CALLBACK =================
+// ================= IMPROVED CALLBACK =================
 app.post("/callback", (req, res) => {
-  console.log("MPESA CALLBACK:", req.body);
+  try {
+    console.log("📩 MPESA CALLBACK RECEIVED:");
+    console.log(JSON.stringify(req.body, null, 2));
 
-  res.json({
-    ResultCode: 0,
-    ResultDesc: "Accepted"
-  });
+    const callback = req.body?.Body?.stkCallback;
+
+    if (!callback) {
+      console.log("❌ Invalid callback structure");
+      return res.json({ ResultCode: 0, ResultDesc: "Ignored" });
+    }
+
+    const resultCode = callback.ResultCode;
+    const resultDesc = callback.ResultDesc;
+
+    // ================= SUCCESS =================
+    if (resultCode === 0) {
+      const items = callback.CallbackMetadata?.Item || [];
+
+      let amount = null;
+      let receipt = null;
+      let phone = null;
+      let date = null;
+
+      items.forEach(item => {
+        if (item.Name === "Amount") amount = item.Value;
+        if (item.Name === "MpesaReceiptNumber") receipt = item.Value;
+        if (item.Name === "PhoneNumber") phone = item.Value;
+        if (item.Name === "TransactionDate") date = item.Value;
+      });
+
+      console.log("✅ PAYMENT SUCCESS");
+      console.log("Amount:", amount);
+      console.log("Receipt:", receipt);
+      console.log("Phone:", phone);
+      console.log("Date:", date);
+
+      // 👉 FUTURE: SAVE TO DATABASE HERE
+      // Example:
+      // savePayment({ amount, receipt, phone, date, status: "SUCCESS" });
+
+    } else {
+      console.log("❌ PAYMENT FAILED");
+      console.log("Reason:", resultDesc);
+    }
+
+    // ALWAYS ACKNOWLEDGE SAFARICOM
+    return res.json({
+      ResultCode: 0,
+      ResultDesc: "Accepted"
+    });
+
+  } catch (error) {
+    console.error("❌ CALLBACK ERROR:", error);
+
+    return res.json({
+      ResultCode: 0,
+      ResultDesc: "Error handled"
+    });
+  }
 });
 
 // ================= START SERVER =================
